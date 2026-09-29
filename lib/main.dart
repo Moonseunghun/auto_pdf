@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
 
 import 'cert_pdf.dart';
@@ -226,6 +227,8 @@ class CertPreviewPage extends StatelessWidget {
         body: PdfPreview(
           build: (format) => buildCertPdf(data, format),
           pdfFileName: certFileName(data),
+          initialPageFormat: PdfPageFormat.a4,
+          canChangePageFormat: false,
           canChangeOrientation: false,
           canDebug: false,
         ),

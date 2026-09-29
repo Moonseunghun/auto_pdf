@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
+import 'package:flutter/services.dart' show rootBundle;
 
 /// 재직증명서 양식 종류.
 enum CertTemplate {
@@ -60,7 +60,7 @@ class CertData {
   final bool showSeal;
 }
 
-/// PDF에 쓸 폰트. 기본값은 Google Fonts(첫 실행 시 인터넷 필요).
+/// PDF에 쓸 폰트. 기본값은 앱에 들어 있는 나눔 폰트(assets/fonts, 오프라인 동작).
 class CertFonts {
   const CertFonts({
     required this.serif,
@@ -71,11 +71,16 @@ class CertFonts {
 
   final pw.Font serif, serifBold, sans, sansBold;
 
-  static Future<CertFonts> google() async => CertFonts(
-        serif: await PdfGoogleFonts.nanumMyeongjoRegular(),
-        serifBold: await PdfGoogleFonts.nanumMyeongjoBold(),
-        sans: await PdfGoogleFonts.nanumGothicRegular(),
-        sansBold: await PdfGoogleFonts.nanumGothicBold(),
+  static CertFonts? _cache;
+
+  static Future<pw.Font> _load(String file) async =>
+      pw.Font.ttf(await rootBundle.load('assets/fonts/$file.ttf'));
+
+  static Future<CertFonts> bundled() async => _cache ??= CertFonts(
+        serif: await _load('NanumMyeongjo-Regular'),
+        serifBold: await _load('NanumMyeongjo-Bold'),
+        sans: await _load('NanumGothic-Regular'),
+        sansBold: await _load('NanumGothic-Bold'),
       );
 }
 
@@ -91,25 +96,26 @@ String _period(DateTime from, DateTime to) {
   return '${_ymd.format(from)} ~ ${_ymd.format(to)} ($len)';
 }
 
-/// 개인 도장: 빨간 원 안에 이름을 세로로(4자 이상이면 2열, 오른쪽 열부터).
+/// 개인 도장: 빨간 원 안에 이름을 한 글자씩 세로로.
+/// 4자 이상이면 한 줄에 두 글자씩(예: 남궁 / 민수).
 pw.Widget personalSeal(String name, pw.Font font, {double size = 38}) {
   final chars = name.replaceAll(' ', '').split('');
   if (chars.isEmpty) return pw.SizedBox(width: size, height: size);
-  final cols = chars.length <= 3 ? 1 : 2;
-  final rows = (chars.length / cols).ceil();
+  final perLine = chars.length <= 3 ? 1 : 2;
+  final rows = (chars.length / perLine).ceil();
   final fs = size * 0.7 / rows;
-  final columns = [
-    for (var c = 0; c < cols; c++)
-      pw.Column(
+  final lines = [
+    for (var r = 0; r < rows; r++)
+      pw.Row(
         mainAxisSize: pw.MainAxisSize.min,
         children: [
-          for (final ch in chars.skip(c * rows).take(rows))
+          for (final ch in chars.skip(r * perLine).take(perLine))
             pw.Text(ch,
                 style: pw.TextStyle(
                     font: font, fontSize: fs, color: _sealRed, height: 1)),
         ],
       ),
-  ].reversed.toList();
+  ];
   return pw.Opacity(
     opacity: 0.88,
     child: pw.Container(
@@ -120,14 +126,15 @@ pw.Widget personalSeal(String name, pw.Font font, {double size = 38}) {
         shape: pw.BoxShape.circle,
         border: pw.Border.all(color: _sealRed, width: size * 0.05),
       ),
-      child: pw.Row(
+      child: pw.Column(
           mainAxisSize: pw.MainAxisSize.min,
-          children: columns),
+          children: lines),
     ),
   );
 }
 
-/// 회사 직인: 빨간 사각형 안에 '회사명 + 인'을 격자로(위→아래, 오른쪽 열부터).
+/// 회사 직인: 빨간 사각형 안에 '회사명 + 인'을 격자로(왼→오른쪽, 위→아래 줄 순서).
+/// 예) 언더핀 → 언더 / 핀인
 pw.Widget companySeal(String company, pw.Font font, {double size = 52}) {
   var text = company
       .replaceAll('(주)', '주식회사')
@@ -135,15 +142,15 @@ pw.Widget companySeal(String company, pw.Font font, {double size = 52}) {
   if (text.isEmpty) return pw.SizedBox(width: size, height: size);
   if (!text.endsWith('인')) text += '인';
   final chars = text.split('');
-  final rows = math.sqrt(chars.length).ceil();
-  final cols = (chars.length / rows).ceil();
+  final cols = math.sqrt(chars.length).ceil();
+  final rows = (chars.length / cols).ceil();
   final fs = size * 0.72 / math.max(cols, rows);
-  final columns = [
-    for (var c = 0; c < cols; c++)
-      pw.Column(
+  final lines = [
+    for (var r = 0; r < rows; r++)
+      pw.Row(
         mainAxisSize: pw.MainAxisSize.min,
         children: [
-          for (final ch in chars.skip(c * rows).take(rows))
+          for (final ch in chars.skip(r * cols).take(cols))
             pw.SizedBox(
               width: fs * 1.05,
               height: fs * 1.05,
@@ -155,7 +162,7 @@ pw.Widget companySeal(String company, pw.Font font, {double size = 52}) {
             ),
         ],
       ),
-  ].reversed.toList();
+  ];
   return pw.Opacity(
     opacity: 0.88,
     child: pw.Container(
@@ -165,10 +172,10 @@ pw.Widget companySeal(String company, pw.Font font, {double size = 52}) {
       decoration: pw.BoxDecoration(
         border: pw.Border.all(color: _sealRed, width: size * 0.05),
       ),
-      child: pw.Row(
+      child: pw.Column(
           mainAxisSize: pw.MainAxisSize.min,
           crossAxisAlignment: pw.CrossAxisAlignment.start,
-          children: columns),
+          children: lines),
     ),
   );
 }
@@ -185,7 +192,7 @@ pw.Widget _stamped(pw.Widget mark, pw.Widget? seal) => seal == null
 /// A4 한 장짜리 재직증명서 PDF를 만든다.
 Future<Uint8List> buildCertPdf(CertData d, PdfPageFormat format,
     {CertFonts? fonts}) async {
-  final f = fonts ?? await CertFonts.google();
+  final f = fonts ?? await CertFonts.bundled();
   final doc = pw.Document();
   doc.addPage(switch (d.template) {
     CertTemplate.basic => _basicPage(d, format, f),
