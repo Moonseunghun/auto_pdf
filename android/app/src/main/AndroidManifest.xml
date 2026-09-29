@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- PDF 한글 폰트(Google Fonts) 다운로드용 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="employment_cert"
         android:name="${applicationName}"
