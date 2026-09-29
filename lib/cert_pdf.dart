@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:vector_math/vector_math_64.dart' show Matrix4;
 import 'package:flutter/services.dart' show rootBundle;
 
 /// 재직증명서 양식 종류.
@@ -67,9 +68,13 @@ class CertFonts {
     required this.serifBold,
     required this.sans,
     required this.sansBold,
+    required this.seal,
   });
 
   final pw.Font serif, serifBold, sans, sansBold;
+
+  /// 도장 글씨용(나눔명조 ExtraBold).
+  final pw.Font seal;
 
   static CertFonts? _cache;
 
@@ -81,11 +86,12 @@ class CertFonts {
         serifBold: await _load('NanumMyeongjo-Bold'),
         sans: await _load('NanumGothic-Regular'),
         sansBold: await _load('NanumGothic-Bold'),
+        seal: await _load('NanumMyeongjo-ExtraBold'),
       );
 }
 
 final _ymd = DateFormat('yyyy년 MM월 dd일');
-const _sealRed = PdfColor.fromInt(0xFFD7263D);
+const _sealRed = PdfColor.fromInt(0xFFC8102E);
 
 String _period(DateTime from, DateTime to) {
   var months = (to.year - from.year) * 12 + to.month - from.month;
@@ -96,46 +102,126 @@ String _period(DateTime from, DateTime to) {
   return '${_ymd.format(from)} ~ ${_ymd.format(to)} ($len)';
 }
 
-/// 개인 도장: 빨간 원 안에 이름을 한 글자씩 세로로.
-/// 4자 이상이면 한 줄에 두 글자씩(예: 남궁 / 민수).
-pw.Widget personalSeal(String name, pw.Font font, {double size = 38}) {
-  final chars = name.replaceAll(' ', '').split('');
-  if (chars.isEmpty) return pw.SizedBox(width: size, height: size);
-  final perLine = chars.length <= 3 ? 1 : 2;
+// ───────────────────────── 도장 ─────────────────────────
+
+/// 칸(w×h)을 꽉 채우도록 늘린 도장 글자 하나.
+pw.Widget _glyph(String ch, pw.Font font, double w, double h) =>
+    _SealGlyph(ch, font, w, h);
+
+/// 글자의 실제 외곽(폰트 메트릭)을 재서 칸의 88%를 정확히 채우게 늘려 그린다.
+/// 일반 Text는 줄 높이 기준이라 늘리면 글자가 위로 삐져나오거나 잘린다.
+class _SealGlyph extends pw.Widget {
+  _SealGlyph(this.ch, this.font, this.w, this.h);
+
+  final String ch;
+  final pw.Font font;
+  final double w, h;
+
+  @override
+  void layout(pw.Context context, pw.BoxConstraints constraints,
+      {bool parentUsesSize = false}) {
+    box = PdfRect(0, 0, w, h);
+  }
+
+  @override
+  void paint(pw.Context context) {
+    super.paint(context);
+    final pf = font.getFont(context);
+    final m = pf.stringMetrics(ch);
+    final gw = m.right - m.left, gh = m.bottom - m.top;
+    if (gw <= 0 || gh <= 0) return;
+    final sx = w * 0.88 / gw, sy = h * 0.88 / gh;
+    final tx = box!.left + (w - gw * sx) / 2 - m.left * sx;
+    final ty = box!.bottom + (h - gh * sy) / 2 - m.top * sy;
+    context.canvas
+      ..saveContext()
+      ..setTransform(Matrix4.identity()
+        ..translateByDouble(tx, ty, 0, 1)
+        ..scaleByDouble(sx, sy, 1, 1))
+      ..setFillColor(_sealRed)
+      ..drawString(pf, 1, ch, 0, 0)
+      ..restoreContext();
+  }
+}
+
+/// 글자를 perLine개씩 줄지어 w×h 상자에 채운다.
+pw.Widget _glyphGrid(
+    List<String> chars, int perLine, pw.Font font, double w, double h) {
   final rows = (chars.length / perLine).ceil();
-  final fs = size * 0.7 / rows;
-  final lines = [
-    for (var r = 0; r < rows; r++)
-      pw.Row(
-        mainAxisSize: pw.MainAxisSize.min,
-        children: [
-          for (final ch in chars.skip(r * perLine).take(perLine))
-            pw.Text(ch,
-                style: pw.TextStyle(
-                    font: font, fontSize: fs, color: _sealRed, height: 1)),
-        ],
+  final cw = w / perLine, ch = h / rows;
+  return pw.Column(
+    mainAxisSize: pw.MainAxisSize.min,
+    children: [
+      for (var r = 0; r < rows; r++)
+        pw.Row(
+          mainAxisSize: pw.MainAxisSize.min,
+          children: [
+            for (final c in chars.skip(r * perLine).take(perLine))
+              _glyph(c, font, cw, ch),
+          ],
+        ),
+    ],
+  );
+}
+
+/// 인주가 덜 묻은 듯한 흰 점을 흩뿌려 실제로 찍은 느낌을 낸다(이름마다 같은 무늬).
+pw.Widget _inked(double size, String seed, pw.Widget child) {
+  final rnd = math.Random(seed.codeUnits.fold<int>(7, (a, b) => a * 31 + b));
+  final specks = [
+    for (var i = 0; i < 70; i++)
+      (
+        rnd.nextDouble() * size,
+        rnd.nextDouble() * size,
+        size * (0.003 + rnd.nextDouble() * 0.007),
       ),
   ];
   return pw.Opacity(
-    opacity: 0.88,
-    child: pw.Container(
+    opacity: 0.9,
+    child: pw.CustomPaint(
+      size: PdfPoint(size, size),
+      foregroundPainter: (canvas, _) {
+        canvas.setFillColor(PdfColors.white);
+        for (final (x, y, r) in specks) {
+          canvas.drawEllipse(x, y, r, r);
+        }
+        canvas.fillPath();
+      },
+      child: child,
+    ),
+  );
+}
+
+/// 개인 도장(원형): 이름을 세로로 꽉 채운다. 4자 이상이면 두 글자씩(남궁 / 민수).
+pw.Widget personalSeal(String name, pw.Font font, {double size = 40}) {
+  final chars = name.replaceAll(' ', '').split('');
+  if (chars.isEmpty) return pw.SizedBox(width: size, height: size);
+  final ring = size * 0.07;
+  final inner = size - ring * 2;
+  final perLine = chars.length <= 3 ? 1 : 2;
+  final (w, h) = switch (chars.length) {
+    1 => (inner * 0.62, inner * 0.62),
+    2 => (inner * 0.5, inner * 0.78),
+    3 => (inner * 0.46, inner * 0.84),
+    _ => (inner * 0.7, inner * 0.7),
+  };
+  return _inked(
+    size,
+    name,
+    pw.Container(
       width: size,
       height: size,
       alignment: pw.Alignment.center,
       decoration: pw.BoxDecoration(
         shape: pw.BoxShape.circle,
-        border: pw.Border.all(color: _sealRed, width: size * 0.05),
+        border: pw.Border.all(color: _sealRed, width: ring),
       ),
-      child: pw.Column(
-          mainAxisSize: pw.MainAxisSize.min,
-          children: lines),
+      child: _glyphGrid(chars, perLine, font, w, h),
     ),
   );
 }
 
-/// 회사 직인: 빨간 사각형 안에 '회사명 + 인'을 격자로(왼→오른쪽, 위→아래 줄 순서).
-/// 예) 언더핀 → 언더 / 핀인
-pw.Widget companySeal(String company, pw.Font font, {double size = 52}) {
+/// 회사 직인(사각): '회사명 + 인'을 왼→오른쪽 줄 순서로 꽉 채운다. 예) 언더핀 → 언더 / 핀인
+pw.Widget companySeal(String company, pw.Font font, {double size = 56}) {
   var text = company
       .replaceAll('(주)', '주식회사')
       .replaceAll(RegExp(r'[\s()]'), '');
@@ -143,39 +229,21 @@ pw.Widget companySeal(String company, pw.Font font, {double size = 52}) {
   if (!text.endsWith('인')) text += '인';
   final chars = text.split('');
   final cols = math.sqrt(chars.length).ceil();
+  final border = size * 0.06, gap = size * 0.06;
+  final area = size - (border + gap) * 2;
   final rows = (chars.length / cols).ceil();
-  final fs = size * 0.72 / math.max(cols, rows);
-  final lines = [
-    for (var r = 0; r < rows; r++)
-      pw.Row(
-        mainAxisSize: pw.MainAxisSize.min,
-        children: [
-          for (final ch in chars.skip(r * cols).take(cols))
-            pw.SizedBox(
-              width: fs * 1.05,
-              height: fs * 1.05,
-              child: pw.Center(
-                child: pw.Text(ch,
-                    style: pw.TextStyle(
-                        font: font, fontSize: fs, color: _sealRed, height: 1)),
-              ),
-            ),
-        ],
-      ),
-  ];
-  return pw.Opacity(
-    opacity: 0.88,
-    child: pw.Container(
+  return _inked(
+    size,
+    text,
+    pw.Container(
       width: size,
       height: size,
       alignment: pw.Alignment.center,
       decoration: pw.BoxDecoration(
-        border: pw.Border.all(color: _sealRed, width: size * 0.05),
+        border: pw.Border.all(color: _sealRed, width: border),
       ),
-      child: pw.Column(
-          mainAxisSize: pw.MainAxisSize.min,
-          crossAxisAlignment: pw.CrossAxisAlignment.start,
-          children: lines),
+      child: _glyphGrid(
+          chars, cols, font, area, rows == cols ? area : area * rows / cols),
     ),
   );
 }
@@ -258,7 +326,9 @@ pw.Page _basicPage(CertData d, PdfPageFormat format, CertFonts f) {
     build: (_) => pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.stretch,
       children: [
-        pw.Text('발급번호: ${d.issueNo}', style: const pw.TextStyle(fontSize: 9)),
+        // 발급번호는 회사가 붙이는 관리번호. 비워 두면 표시하지 않는다.
+        pw.Text(d.issueNo.isEmpty ? '' : '발급번호: ${d.issueNo}',
+            style: const pw.TextStyle(fontSize: 9)),
         pw.SizedBox(height: 28),
         pw.Center(
           child: pw.Text('재 직 증 명 서',
@@ -344,7 +414,9 @@ pw.Page _basicPage(CertData d, PdfPageFormat format, CertFonts f) {
                 pw.Text('(인)',
                     style: const pw.TextStyle(
                         fontSize: 12, color: PdfColors.grey600)),
-                d.showSeal ? companySeal(d.companyName, f.serifBold) : null,
+                d.showSeal && d.ceoName.isNotEmpty
+                    ? personalSeal(d.ceoName, f.seal, size: 50)
+                    : null,
               ),
             ),
           ],
@@ -385,6 +457,24 @@ pw.Page _standardPage(CertData d, PdfPageFormat format, CertFonts f) {
 
   pw.Widget label(double w, String text) => cell(w, text, style: bold);
   pw.Widget value(double w, String text) => cell(w, text, center: false);
+
+  // 이름 + (인). 도장 날인이 켜져 있으면 그 이름으로 도장을 찍는다.
+  pw.Widget signed(String name) => cell(wVal3, '',
+      child: pw.Row(
+        children: [
+          pw.Expanded(child: pw.Text(name, style: txt)),
+          pw.SizedBox(
+            width: 38,
+            height: rowH,
+            child: _stamped(
+              pw.Text('(인)', style: txt),
+              d.showSeal && name.isNotEmpty
+                  ? personalSeal(name, f.seal, size: 36)
+                  : null,
+            ),
+          ),
+        ],
+      ));
 
   pw.Widget sectionCol(String title, int rows) => pw.Container(
         width: wSec,
@@ -454,7 +544,7 @@ pw.Page _standardPage(CertData d, PdfPageFormat format, CertFonts f) {
                   label(wLab, '사업자\n등록번호'),
                   value(w1 + w2, d.bizNumber),
                   label(wLab2, '대표자성명'),
-                  value(wVal3, d.ceoName),
+                  signed(d.ceoName),
                 ],
                 [
                   label(wLab, '근무부서'),
@@ -471,24 +561,7 @@ pw.Page _standardPage(CertData d, PdfPageFormat format, CertFonts f) {
                   label(w1, '직위'),
                   value(w2, d.confirmerTitle),
                   label(wLab2, '성명'),
-                  cell(wVal3, '',
-                      child: pw.Row(
-                        children: [
-                          pw.Expanded(
-                              child: pw.Text(d.confirmerName, style: txt)),
-                          pw.SizedBox(
-                            width: 36,
-                            height: rowH,
-                            child: _stamped(
-                              pw.Text('(인)', style: txt),
-                              d.showSeal && d.confirmerName.isNotEmpty
-                                  ? personalSeal(d.confirmerName, f.serifBold,
-                                      size: 34)
-                                  : null,
-                            ),
-                          ),
-                        ],
-                      )),
+                  signed(d.confirmerName),
                 ],
               ]),
             ],
@@ -511,7 +584,7 @@ pw.Page _standardPage(CertData d, PdfPageFormat format, CertFonts f) {
               height: 64,
               child: _stamped(
                 pw.Text('(직인)', style: bold),
-                d.showSeal ? companySeal(d.companyName, f.serifBold) : null,
+                d.showSeal ? companySeal(d.companyName, f.seal, size: 60) : null,
               ),
             ),
             pw.SizedBox(width: 20),

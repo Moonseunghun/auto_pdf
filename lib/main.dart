@@ -103,7 +103,7 @@ class _CertFormPageState extends State<CertFormPage> {
   }
 
   Widget _field(String key, String label,
-          {String? hint, bool required = true}) =>
+          {String? hint, bool required = true, Widget? suffix}) =>
       Padding(
         padding: const EdgeInsets.only(bottom: 12),
         child: TextFormField(
@@ -112,6 +112,7 @@ class _CertFormPageState extends State<CertFormPage> {
             labelText: required ? '$label *' : label,
             hintText: hint,
             border: const OutlineInputBorder(),
+            suffixIcon: suffix,
           ),
           validator: required
               ? (v) => (v == null || v.trim().isEmpty) ? '$label을(를) 입력하세요.' : null
@@ -170,7 +171,7 @@ class _CertFormPageState extends State<CertFormPage> {
                     _field('birth', '생년월일', hint: '1990-01-01'),
                   _field('address', std ? '현주소' : '주소'),
                   _title('재직사항'),
-                  _field('department', std ? '근무부서' : '부서'),
+                  _field('department', std ? '근무부서' : '부서', required: false),
                   _field('position', std ? '직급' : '직위'),
                   _dateField('입사일', _joinDate, true),
                   if (!std) _field('purpose', '용도', hint: '금융기관 제출용'),
@@ -188,13 +189,21 @@ class _CertFormPageState extends State<CertFormPage> {
                   ],
                   _title('발급정보'),
                   _dateField('발급일', _issueDate, false),
-                  if (!std) _field('issueNo', '발급번호', required: false),
+                  if (!std)
+                    _field('issueNo', '발급번호',
+                        hint: '비워 두면 표시 안 함',
+                        required: false,
+                        suffix: TextButton(
+                          onPressed: () => _c['issueNo']!.text =
+                              DateFormat('yyyy-MMdd-HHmm').format(DateTime.now()),
+                          child: const Text('자동'),
+                        )),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     title: const Text('도장 자동 날인'),
                     subtitle: Text(std
-                        ? '확인자 성명 (인) · 업체명 (직인) 자리에 도장을 찍습니다'
-                        : '대표이사 (인) 자리에 회사 직인을 찍습니다'),
+                        ? '대표자·확인자 (인)에 이름 도장, 업체명 (직인)에 회사 직인'
+                        : '대표이사 (인) 자리에 대표자 이름 도장'),
                     value: _showSeal,
                     onChanged: (v) => setState(() => _showSeal = v),
                   ),
