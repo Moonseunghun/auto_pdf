@@ -31,9 +31,12 @@ class _CertFormPageState extends State<CertFormPage> {
     for (final k in [
       'name', 'birth', 'address', 'department', 'position', 'purpose',
       'companyName', 'bizNumber', 'companyAddress', 'ceoName', 'issueNo',
+      'rrn', 'companyPhone', 'confirmerTitle', 'confirmerName',
     ])
       k: TextEditingController(),
   };
+  CertTemplate _template = CertTemplate.standard;
+  bool _showSeal = true;
   DateTime? _joinDate;
   DateTime _issueDate = DateTime.now();
   final _fmt = DateFormat('yyyy-MM-dd');
@@ -73,6 +76,12 @@ class _CertFormPageState extends State<CertFormPage> {
       return;
     }
     final data = CertData(
+      template: _template,
+      showSeal: _showSeal,
+      rrn: _v('rrn'),
+      companyPhone: _v('companyPhone'),
+      confirmerTitle: _v('confirmerTitle'),
+      confirmerName: _v('confirmerName'),
       name: _v('name'),
       birth: _v('birth'),
       address: _v('address'),
@@ -129,6 +138,8 @@ class _CertFormPageState extends State<CertFormPage> {
         child: Text(t, style: Theme.of(context).textTheme.titleMedium),
       );
 
+  bool get std => _template == CertTemplate.standard;
+
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(title: const Text('재직증명서 발급')),
@@ -140,23 +151,52 @@ class _CertFormPageState extends State<CertFormPage> {
               child: ListView(
                 padding: const EdgeInsets.all(16),
                 children: [
+                  _title('양식'),
+                  SegmentedButton<CertTemplate>(
+                    segments: [
+                      for (final t in CertTemplate.values)
+                        ButtonSegment(value: t, label: Text(t.label)),
+                    ],
+                    selected: {_template},
+                    onSelectionChanged: (s) =>
+                        setState(() => _template = s.first),
+                  ),
                   _title('인적사항'),
                   _field('name', '성명'),
-                  _field('birth', '생년월일', hint: '1990-01-01'),
-                  _field('address', '주소'),
+                  if (std)
+                    _field('rrn', '주민등록번호', hint: '900101-1******')
+                  else
+                    _field('birth', '생년월일', hint: '1990-01-01'),
+                  _field('address', std ? '현주소' : '주소'),
                   _title('재직사항'),
-                  _field('department', '부서'),
-                  _field('position', '직위'),
+                  _field('department', std ? '근무부서' : '부서'),
+                  _field('position', std ? '직급' : '직위'),
                   _dateField('입사일', _joinDate, true),
-                  _field('purpose', '용도', hint: '금융기관 제출용'),
+                  if (!std) _field('purpose', '용도', hint: '금융기관 제출용'),
                   _title('회사정보'),
-                  _field('companyName', '회사명'),
+                  _field('companyName', std ? '업체명' : '회사명'),
+                  if (std)
+                    _field('companyPhone', '업체전화', hint: '02-000-0000'),
                   _field('bizNumber', '사업자등록번호', hint: '000-00-00000'),
-                  _field('companyAddress', '소재지'),
-                  _field('ceoName', '대표자'),
+                  _field('companyAddress', std ? '업체주소' : '소재지'),
+                  _field('ceoName', '대표자성명'),
+                  if (std) ...[
+                    _title('확인자'),
+                    _field('confirmerTitle', '확인자 직위'),
+                    _field('confirmerName', '확인자 성명'),
+                  ],
                   _title('발급정보'),
                   _dateField('발급일', _issueDate, false),
-                  _field('issueNo', '발급번호', required: false),
+                  if (!std) _field('issueNo', '발급번호', required: false),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('도장 자동 날인'),
+                    subtitle: Text(std
+                        ? '확인자 성명 (인) · 업체명 (직인) 자리에 도장을 찍습니다'
+                        : '대표이사 (인) 자리에 회사 직인을 찍습니다'),
+                    value: _showSeal,
+                    onChanged: (v) => setState(() => _showSeal = v),
+                  ),
                   const SizedBox(height: 8),
                   FilledButton.icon(
                     onPressed: _submit,
